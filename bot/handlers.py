@@ -28,6 +28,7 @@ from .state import (
     get_user_state, set_user_state, clear_user_state,
     is_in_test_mode, cleanup_bot_messages,
 )
+from .recall import handle_recall_callback
 from .reminders import handle_reminder_callback
 from .word_memo import handle_word_memo_callback, handle_placement_callback
 
@@ -166,4 +167,5 @@ CALLBACK_ROUTES = {
     "settings": handle_settings_callback,
     "placement": handle_placement_callback,
     "rem": handle_reminder_callback,
+    "recall": handle_recall_callback,
 }

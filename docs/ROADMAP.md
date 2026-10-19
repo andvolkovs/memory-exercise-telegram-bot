@@ -5,16 +5,25 @@ Working agreement: build one at a time, flag-gate anything user-facing, keep
 each feature removable like audio-viz. Details get worked out at build time —
 what's written here is direction, not final spec.
 
-Suggested build order: #1 next (#9's notification plumbing is live for it
-to ride on), with #3 as the next big exercise. #2 partially superseded by
+Suggested build order: #1's audio half once audio is switched on; #3 as
+the next big exercise. #2 partially superseded by
 the post-listen focus check — revisit whether vividness still adds signal.
 Shipped: #7 (redemption codes), #9 (daily reminder + fresh-mind bonus),
 #4 (visualization XP bar + audio achievements), #10 L1+L2 (usage logging +
-analytics dashboard).
+analytics dashboard), #1 word-memo half (delayed recall).
 
 ---
 
-## 1. Delayed recall (spaced repetition) — flagship feature
+## 1. Delayed recall (spaced repetition) — flagship feature — word memo ✅ SHIPPED
+
+Word-memo half shipped as self-contained `bot/recall.py` (spec in
+docs/FEATURES.md › Delayed recall). Decisions taken at build time: source
+window 8 h–4 days instead of strictly "yesterday"; 5–10 questions; ×1.5 XP
+without diminishing returns; delivered on /start + inside the existing
+reminder ping (no separate opt-in — the ping already is one). Still open:
+the audio half, SM-2 intervals, "Iron Memory" achievement, and whether
+recall gets its own board. Original plan below.
+
 
 Re-test users on material from previous days. Retrieval after sleep is where
 consolidation actually happens — immediate quizzes test attention, delayed

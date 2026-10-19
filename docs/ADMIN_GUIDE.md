@@ -22,6 +22,7 @@ Non-admins get silence — the commands don't exist for them.
 | `/admin xp on` / `/admin xp off` | Turn the whole XP/level system on/off (see below) |
 | `/admin audio on` / `/admin audio off` | Show/hide the Audio Visualization exercise for everyone (default: off) |
 | `/admin audioquiz on` / `/admin audioquiz off` | Offer the optional detail quiz after audio stories (default: off) |
+| `/admin recall on` / `/admin recall off` | Delayed recall button on /start and in reminder pings (default: on) |
 | `/admin analytics on` / `/admin analytics off` | Raw interaction logging (default: on) — training minutes are recorded either way |
 
 Get someone's Telegram ID: it's in `/admin users` next to their name, or they

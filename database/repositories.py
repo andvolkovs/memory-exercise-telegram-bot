@@ -21,7 +21,7 @@ from .models import (
 _PCT = ExerciseSession.score * 100.0 / ExerciseSession.max_score
 
 # Quiz round type stored in parameters JSON:
-# "test" | "reverse" | "reverse_extra" | "retry" | "placement" |
+# "test" | "reverse" | "reverse_extra" | "retry" | "placement" | "recall" |
 # "audio_listen" | "audio_quiz".
 _ROUND_MODE = ExerciseSession.parameters["mode"].as_string()
 
@@ -36,13 +36,18 @@ _HAS_SCORE = and_(
 # placement round (one-off calibration for new users) nor an audio detail
 # quiz (different exercise, tiny question counts — would skew word-memo
 # averages) nor an extra reverse round (2nd+ reverse on one memorized set —
-# repeat practice that would let a single set farm the leaderboard average).
+# repeat practice that would let a single set farm the leaderboard average)
+# nor a delayed-recall round (a 5–10 question sample of an older test —
+# different task, kept off the leaderboard until it has its own board).
 # The FIRST reverse quiz DOES count — it tests the full set, column-flipped.
+# Mirrored in pandas as dashboard.py UNSCORED_MODES — change both.
 _IS_SCORED_TEST = and_(
     _HAS_SCORE,
     or_(
         _ROUND_MODE.is_(None),
-        _ROUND_MODE.notin_(("retry", "placement", "audio_quiz", "reverse_extra")),
+        _ROUND_MODE.notin_(
+            ("retry", "placement", "audio_quiz", "reverse_extra", "recall")
+        ),
     ),
 )
 
@@ -152,19 +157,16 @@ class UserRepository:
             await self.session.flush()
         return user
 
-    async def get_users_due_reminder(self, utc_hour: int) -> list[User]:
-        """Users whose daily reminder fires at this UTC hour and who haven't
-        trained today yet (no nagging after a done session). Part of the
+    async def get_users_with_reminder_at(self, utc_hour: int) -> list[User]:
+        """Users whose daily reminder fires at this UTC hour. The caller
+        decides per user what (if anything) to send: no training nudge after
+        a done session, but a due delayed recall still goes out. Part of the
         reminder feature (bot/reminders.py) — remove together with it."""
         rem = User.preferences["reminder"]
         result = await self.session.execute(
             select(User).where(
                 rem["enabled"].as_boolean().is_(True),
                 rem["utc_hour"].as_integer() == utc_hour,
-                or_(
-                    User.last_trained_date.is_(None),
-                    User.last_trained_date < utcnow().date(),
-                ),
             )
         )
         return list(result.scalars().all())
@@ -349,6 +351,27 @@ class ExerciseSessionRepository:
                 "pct": (sess.score or 0) / sess.max_score * 100,
             })
         return history
+
+    async def get_recall_candidates(
+        self, user_id: int, completed_after: datetime,
+        completed_before: datetime, limit: int = 5,
+    ) -> list[ExerciseSession]:
+        """Fresh word-memo tests completed inside the window, newest first —
+        delayed-recall sources (bot/recall.py). The caller picks the first
+        one that stored its word list (rows before that change didn't)."""
+        result = await self.session.execute(
+            select(ExerciseSession)
+            .where(
+                ExerciseSession.user_id == user_id,
+                ExerciseSession.exercise_type == ExerciseType.WORD_MEMORIZATION,
+                _ROUND_MODE == "test",
+                ExerciseSession.completed_at > completed_after,
+                ExerciseSession.completed_at <= completed_before,
+            )
+            .order_by(ExerciseSession.completed_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
 
     # ------------------------------------------------------------------
     # Leaderboard & admin analytics

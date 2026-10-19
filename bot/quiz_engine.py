@@ -32,7 +32,7 @@ from gamification import (
     AchievementContext, evaluate_achievements,
     SKILLS, EXERCISE_SKILLS, compute_test_xp, level_from_xp,
 )
-from gamification.xp import MIN_XP_SCORE_PCT
+from gamification.xp import MIN_XP_SCORE_PCT, RECALL_XP_MULT
 from exercises.word_memorization import (
     QUESTION_TIME_LIMIT,
     DIFFICULTY_NAMES,
@@ -422,12 +422,18 @@ async def _show_test_results(context, chat_id, state) -> None:
     is_retry = round_mode == "retry"
     is_placement = round_mode == "placement"
     is_extra_reverse = round_mode == "reverse_extra"
+    # Delayed recall (bot/recall.py): a sample of an older test, no study
+    # phase. Unscored like retry — no PB, achievements or leaderboard.
+    is_recall = round_mode == "recall"
+    is_unscored = is_retry or is_placement or is_extra_reverse or is_recall
 
     # XP throttle for repeat rounds on one memorized set: first reverse earns
     # half (recalling backwards is real work, but the set was already paid out
     # in full), everything after that — extra reverses, second+ retries —
     # earns nothing. Blocks the farm loop: memorize once, reverse forever.
-    if round_mode == "reverse":
+    if is_recall:
+        xp_mult = RECALL_XP_MULT
+    elif round_mode == "reverse":
         xp_mult = 0.5
     elif is_extra_reverse or (is_retry and state.get("test_retry_rounds", 1) > 1):
         xp_mult = 0.0
@@ -457,21 +463,33 @@ async def _show_test_results(context, chat_id, state) -> None:
                 )
                 # Save current session — score/max_score go into real columns
                 # so stats, leaderboard and admin views aggregate in SQL.
+                params = {
+                    "count": len(pairs), "mode": round_mode, "format": fmt,
+                    "speed": state.get("speed_mode", False),
+                }
+                # The word list itself, on fresh word-memo tests only — the
+                # source for delayed recall (bot/recall.py). Retry/reverse
+                # rounds reuse the same set, so storing it again adds nothing.
+                if round_mode == "test" and exercise_key == "word_memo":
+                    params["items"] = [
+                        list(p) if isinstance(p, (list, tuple)) else p
+                        for p in pairs
+                    ]
+                if is_recall:
+                    params["source_id"] = state.get("recall_source_id")
+                    params["source_format"] = state.get("recall_source_format")
                 await session_repo.create(
                     user_id=db_user.id,
                     exercise_type=exercise_enum,
                     difficulty=difficulty_value,
-                    parameters={
-                        "count": len(pairs), "mode": round_mode, "format": fmt,
-                        "speed": state.get("speed_mode", False),
-                    },
+                    parameters=params,
                     score=correct_count, max_score=total, completed=True,
                     duration_s=round_duration_s(state),
                 )
                 # Personal best — not on retries (merged score mixes baseline
                 # with a redo), not on placement (one-off calibration), not on
-                # extra reverses (unscored practice rounds).
-                if not is_retry and not is_placement and not is_extra_reverse:
+                # extra reverses (unscored practice rounds), not on recall.
+                if not is_unscored:
                     if prev_best is not None and score_pct > prev_best:
                         personal_best_text = f"🏆 *New personal best!* (previous: {prev_best:.0f}%)"
                     elif prev_best is None:
@@ -488,8 +506,8 @@ async def _show_test_results(context, chat_id, state) -> None:
                         streak_text = f"🔥 *{s}-day streak!* Keep it up!"
                 # Achievements — skipped on retries so a retried-to-100% score
                 # can't farm perfect-score achievements; skipped on placement
-                # and extra reverses (excluded from scored tests entirely).
-                if not is_retry and not is_placement and not is_extra_reverse:
+                # extra reverses and recall (excluded from scored tests).
+                if not is_unscored:
                     total_tests = await session_repo.count_completed_tests(db_user.id)
                     ctx = AchievementContext(
                         score_pct=score_pct,
@@ -508,11 +526,8 @@ async def _show_test_results(context, chat_id, state) -> None:
                         )
                 # Leaderboard standing — full results only (compact stays a
                 # bare score card), and only on rounds that actually moved the
-                # average (retry/placement/extra-reverse are excluded from it).
-                if (
-                    not compact and not is_retry and not is_placement
-                    and not is_extra_reverse
-                ):
+                # average (retry/placement/extra-reverse/recall are excluded).
+                if not compact and not is_unscored:
                     rank_line, offer_join = await _build_rank_line(
                         session_repo, user_repo, chat_id, db_user.preferences,
                     )
@@ -552,14 +567,17 @@ async def _show_test_results(context, chat_id, state) -> None:
                         # extend nor break it: a retry subset always rates
                         # easy (it used to reset the streak to 0), and a
                         # reverse would count the same set twice. Scored
-                        # from 0 so they get no streak bonus either.
-                        is_repeat_round = round_mode in ("retry", "reverse")
+                        # from 0 so they get no streak bonus either. Recall
+                        # is a small sample of an old set — same treatment.
+                        is_repeat_round = round_mode in ("retry", "reverse", "recall")
                         xp_res = compute_test_xp(
                             pairs=len(quiz_items),
                             difficulty=difficulty_value,
                             speed_mode=state.get("speed_mode", False),
                             score_pct=round_pct,
-                            level=skill_row.level,
+                            # Recall: the bot sizes the round, so no
+                            # diminishing returns (level 1 = full value).
+                            level=1 if is_recall else skill_row.level,
                             hard_streak=0 if is_repeat_round else skill_row.hard_streak,
                         )
                         new_hard_streak = (
@@ -590,7 +608,11 @@ async def _show_test_results(context, chat_id, state) -> None:
                                 f"⭐ *+{xp_award} XP* {skill.emoji} {skill.name} — "
                                 f"Level {new_level} ({xp_into}/{xp_need})"
                             )
-                            if xp_mult < 1.0 and not compact:
+                            if is_recall and not compact:
+                                xp_lines.append(
+                                    f"🧠 Delayed recall — ×{RECALL_XP_MULT:g} XP"
+                                )
+                            elif xp_mult < 1.0 and not compact:
                                 xp_lines.append(
                                     "🔀 Reverse round — half XP (fresh tests pay full)"
                                 )
@@ -635,6 +657,11 @@ async def _show_test_results(context, chat_id, state) -> None:
         compact=compact,
         fmt=fmt,
     )
+    if is_recall:
+        results_text = (
+            f"🧠 *Delayed recall* — {state.get('recall_age_label', 'an earlier test')}\n\n"
+            + results_text
+        )
 
     if rank_line:
         results_text += "\n\n" + rank_line
@@ -651,12 +678,16 @@ async def _show_test_results(context, chat_id, state) -> None:
         results_text += "\n\n" + sprint_line
 
     state["test_active"] = False
-    state["last_test_results"] = merged_results
-    state["last_test_pairs"] = pairs
+    # Not for recall: a stale Retry/Reverse button from an older results
+    # screen must not turn the recall sample into a paid retry round.
+    if not is_recall:
+        state["last_test_results"] = merged_results
+        state["last_test_pairs"] = pairs
 
     # Save used words to rolling recent-words window (avoids repetition).
-    # Word-memo only — other exercises' items aren't vocabulary.
-    if exercise_key == "word_memo":
+    # Word-memo only — other exercises' items aren't vocabulary. Recall
+    # rounds re-ask old words; they were saved when first studied.
+    if exercise_key == "word_memo" and not is_recall:
         try:
             await save_recent_words(chat_id, pairs)
         except Exception as e:
@@ -676,6 +707,13 @@ async def _show_test_results(context, chat_id, state) -> None:
                 f"🚀 Start: {rec_label}, {rec_count} pairs",
                 callback_data=f"placement:apply:{rec_diff.value}:{rec_count}",
             )],
+            [InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")],
+        ])
+    elif is_recall:
+        # No retry/reverse/level-up: the round is a fixed sample of an old
+        # set, and the results above just revealed every answer.
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎯 New test", callback_data="exercise:word_memo")],
             [InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")],
         ])
     else:
