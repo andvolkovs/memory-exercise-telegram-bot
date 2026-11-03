@@ -24,8 +24,10 @@ Bookkeeping (quiz_engine._show_test_results): unscored (_IS_SCORED_TEST +
 dashboard UNSCORED_MODES — no stats/leaderboard/PB/achievements), daily
 streak counts, hard streak untouched, XP = REVIEW_XP_MULT (¼) of what the
 round would pay as a fresh test, only at REVIEW_MIN_PCT (80%)+ and only on
-the first review of that list per UTC day (review_xp_date on the source
-row; also last_review_at / last_review_pct / reviews).
+the first review of that list per UTC day — pass or fail; a failed first
+review closes XP for the day too, or its results screen would hand over
+the answers for "Review again" (last_review_at on the source row decides;
+review_xp_date / last_review_pct / reviews are kept alongside).
 
 REMOVAL: delete this module plus: "lists" route (bot/handlers.py), /lists
 command (bot/__init__.py, bot/menu.py), main-menu button + autosave
@@ -273,10 +275,12 @@ async def _detail(telegram_id: int, row_id: int, page: int) -> tuple[str, Inline
             f"🔁 Reviewed {reviews}× · last {params.get('last_review_pct', 0)}% "
             f"({format_when(last_dt, offset)})"
         )
-    if params.get("review_xp_date") == utcnow().date().isoformat():
-        lines.append("⭐ _Review XP already earned for this list today._")
+    if (params.get("last_review_at") or "")[:10] == utcnow().date().isoformat():
+        lines.append("⭐ _Already reviewed today — review XP is back tomorrow._")
     else:
-        lines.append(f"⭐ _Review at {REVIEW_MIN_PCT:.0f}%+ today for a little XP._")
+        lines.append(
+            f"⭐ _Your first review today pays a little XP at {REVIEW_MIN_PCT:.0f}%+._"
+        )
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🎯 Review from memory", callback_data=f"lists:review:{row_id}")],
         [InlineKeyboardButton("🗑 Remove from saved", callback_data=f"lists:remove:{row_id}:{page}")],
@@ -308,6 +312,21 @@ async def _set_saved(telegram_id: int, row_id: int, saved: bool) -> bool:
             return False
         await repo.set_parameters(row, saved=saved)
         return True
+
+
+async def handle_legacy_recall_callback(query, context, data: str) -> None:
+    """recall:* buttons from the retired delayed-recall build (Oct 2026)
+    still sit in old reminder pings and results messages — point them at
+    the panel instead of a dead tap."""
+    await query.edit_message_text(
+        "🧠 Delayed recall has been replaced by 📚 *Saved lists* — every "
+        "test list is kept by date, and you can review any of them from memory.",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📚 Saved lists", callback_data="lists:page:0")],
+            _MAIN_MENU_ROW,
+        ]),
+    )
 
 
 async def handle_lists_callback(query, context, data: str) -> None:

@@ -240,7 +240,7 @@ async def test_review_xp_quarter_once_per_list_per_day_and_unscored():
 
     # Same list, same day: no more XP.
     ctx = await _review(uid, src_id, ["river", "stone"])
-    assert "already earned today" in ctx.bot.sent[-1]
+    assert "first review of a list each day" in ctx.bot.sent[-1]
     async with get_session() as s:
         skill = await UserSkillRepository(s).get_or_create(user_db_id, "mnemonics")
         assert skill.xp == first_xp
@@ -248,16 +248,40 @@ async def test_review_xp_quarter_once_per_list_per_day_and_unscored():
         assert source.parameters["reviews"] == 2
 
 
-async def test_review_below_80_pct_earns_nothing_and_keeps_xp_open():
+async def test_failed_first_review_closes_xp_for_the_day():
+    # The failed review's results show the whole list — "Review again" must
+    # not pay out on answers copied off that screen.
     uid = await _new_user()
     async with get_session() as s:
         u = await UserRepository(s).get_by_telegram_id(uid)
         src = await _stored(s, u, saved=True)
         src_id, user_db_id = src.id, u.id
-    ctx = await _review(uid, src_id, ["river", "wrong"])    # 50%
+    ctx = await _review(uid, src_id, ["(skipped)", "(skipped)"])    # 0%
     assert "Review XP needs 80%+" in ctx.bot.sent[-1]
+    ctx = await _review(uid, src_id, ["river", "stone"])            # copied
+    assert "first review of a list each day" in ctx.bot.sent[-1]
     async with get_session() as s:
         skill = await UserSkillRepository(s).get_or_create(user_db_id, "mnemonics")
         assert skill.xp == 0
         source = await ExerciseSessionRepository(s).get_saved_list(user_db_id, src_id)
+        assert source.parameters["reviews"] == 2
         assert "review_xp_date" not in source.parameters
+
+
+async def test_rolled_back_save_drops_the_toggle(monkeypatch):
+    # The row id would point at nothing — or at a reused rowid.
+    async def boom(*a, **kw):
+        raise RuntimeError("late failure in the results transaction")
+    monkeypatch.setattr(qe, "record_sprint_progress", boom)
+    uid = await _new_user()
+    ctx = await _finish_test(uid)
+    assert not any(d.startswith("lists:") for d in _callbacks(ctx.bot.markups[-1]))
+    _, rows = await _rows(uid)
+    assert rows == []
+
+
+async def test_old_recall_buttons_point_to_saved_lists():
+    uid = await _new_user()
+    q = FakeQuery(uid)
+    await sl.handle_legacy_recall_callback(q, FakeContext(uid), "recall:go:5")
+    assert "replaced by 📚 *Saved lists*" in q.edits[-1]

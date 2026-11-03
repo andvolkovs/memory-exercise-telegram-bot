@@ -493,8 +493,10 @@ async def _show_test_results(context, chat_id, state) -> None:
                 )
                 if is_fresh_list:
                     saved_row_id, saved_flag = new_row.id, params["saved"]
-                # Review: the list it re-quizzed. Review XP pays once per list
-                # per UTC day (review_xp_date on that row).
+                # Review: the list it re-quizzed. Review XP is decided by the
+                # FIRST review of that list each UTC day, pass or fail — gating
+                # on "XP paid today" let a skipped review show the answers,
+                # then "Review again" paid out on a copy.
                 today_iso = utcnow().date().isoformat()
                 review_src = None
                 review_xp_claimed = False
@@ -502,9 +504,10 @@ async def _show_test_results(context, chat_id, state) -> None:
                     review_src = await session_repo.get_own_test_row(
                         db_user.id, state.get("review_source_id"),
                     )
+                last_review_at = (review_src.parameters or {}).get("last_review_at") if review_src else None
                 review_xp_open = bool(
                     review_src
-                    and (review_src.parameters or {}).get("review_xp_date") != today_iso
+                    and (not last_review_at or last_review_at[:10] != today_iso)
                 )
                 # Personal best — not on retries (merged score mixes baseline
                 # with a redo), not on placement (one-off calibration), not on
@@ -612,7 +615,7 @@ async def _show_test_results(context, chat_id, state) -> None:
                                 review_note = f"💡 _Review XP needs {REVIEW_MIN_PCT:.0f}%+._"
                             elif not review_xp_open:
                                 xp_award = 0
-                                review_note = "💡 _Review XP for this list is already earned today._"
+                                review_note = "💡 _Review XP only counts on the first review of a list each day._"
                             elif xp_award > 0:
                                 review_xp_claimed = True
                         # ⚡ Fresh-mind bonus: test launched from a daily
@@ -640,7 +643,7 @@ async def _show_test_results(context, chat_id, state) -> None:
                             )
                             if is_review and not compact:
                                 xp_lines.append(
-                                    "📚 List review — ¼ XP, first good review "
+                                    "📚 List review — ¼ XP, first review "
                                     "of this list today"
                                 )
                             elif xp_mult < 1.0 and not compact:
@@ -688,6 +691,10 @@ async def _show_test_results(context, chat_id, state) -> None:
                     )
     except Exception as e:
         logger.exception(f"Failed to save/check test results: {e}")
+        # The whole transaction rolled back, the session row included: a
+        # toggle pointing at its id would be dead — or, since SQLite reuses
+        # a rolled-back rowid, flip the user's NEXT list instead.
+        saved_row_id = None
 
     count = state.get("count", len(pairs))
     speed_mode = state.get("speed_mode", False)

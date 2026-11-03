@@ -28,7 +28,7 @@ from .state import (
     get_user_state, set_user_state, clear_user_state,
     is_in_test_mode, cleanup_bot_messages,
 )
-from .saved_lists import handle_lists_callback
+from .saved_lists import handle_legacy_recall_callback, handle_lists_callback
 from .reminders import handle_reminder_callback
 from .word_memo import handle_word_memo_callback, handle_placement_callback
 
@@ -168,4 +168,6 @@ CALLBACK_ROUTES = {
     "placement": handle_placement_callback,
     "rem": handle_reminder_callback,
     "lists": handle_lists_callback,
+    # Retired Oct 2026 build — old buttons still in chats. Remove ~2027.
+    "recall": handle_legacy_recall_callback,
 }

@@ -111,7 +111,7 @@ toggles `xp|audio|audioquiz|audioxp|reminders|sprint|lists|analytics on|off`.
 
 Callbacks route through `callback_handler` → `CALLBACK_ROUTES`, keyed by
 prefix (`word_memo`, `audio_viz`, `lb`, `menu`, `settings`, `placement`,
-`rem`, `lists`). In-test text goes through `text_message_handler`.
+`rem`, `lists`, plus legacy `recall` → "replaced" notice). In-test text goes through `text_message_handler`.
 
 ## Features (summary — detail in `docs/FEATURES.md`)
 
