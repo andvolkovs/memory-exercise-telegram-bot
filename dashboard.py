@@ -15,7 +15,7 @@ Every chart has a camera icon in its top-right corner that downloads a PNG,
 which is the "shareable graphic" story until proper share cards exist.
 
 Scoring rules mirror the bot exactly (see database/repositories.py
-_IS_SCORED_TEST): retry, placement, audio_quiz, reverse_extra and recall rounds are
+_IS_SCORED_TEST): retry, placement, audio_quiz, reverse_extra, review and recall rounds are
 excluded from accuracy stats so the numbers here match /stats and the
 leaderboard. They still count as training *time* — practice is practice.
 """
@@ -30,7 +30,7 @@ import plotly.express as px
 import streamlit as st
 
 # Rounds excluded from accuracy aggregates (but not from training time).
-UNSCORED_MODES = {"retry", "placement", "audio_quiz", "reverse_extra", "recall"}
+UNSCORED_MODES = {"retry", "placement", "audio_quiz", "reverse_extra", "review", "recall"}
 
 # A gap longer than this starts a new "visit" when sessionizing raw events.
 # Telegram gives no app-open/close signal, so every time-in-bot number derived

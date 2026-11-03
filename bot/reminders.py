@@ -4,9 +4,7 @@ Daily training reminder + fresh-mind XP bonus.
 Opt-in per user via /settings: pick a local hour, the bot pings once a day
 with a one-tap button that starts a test with the user's last-used settings.
 Starting within FRESH_MIND_WINDOW_MIN of the ping pays a ×FRESH_MIND_MULT
-XP bonus, once per day. Users who already trained today get no training
-nudge — only a delayed-recall button if one is due (bot/recall.py), which
-otherwise rides along as a second button on the normal ping.
+XP bonus, once per day. Users who already trained today are never pinged.
 
 Timezone handling: Telegram exposes no user timezone, so setup asks "what
 time is it for you right now?" and stores the derived UTC hour. Half-hour
@@ -21,7 +19,7 @@ REMOVAL: self-contained module. Delete it plus these touch points:
 schedule_reminder_job call + import (bot/__init__.py), "rem" route
 (bot/handlers.py), reminder_settings_rows/text calls (bot/commands.py),
 the fresh-mind block in bot/quiz_engine.py (marked with "Fresh-mind bonus"),
-get_users_with_reminder_at (database/repositories.py), REMINDERS_ENABLED_KEY
+get_users_due_reminder (database/repositories.py), REMINDERS_ENABLED_KEY
 (bot/features.py), "reminders" admin subcommand (bot/admin.py). Or just
 /admin reminders off to pause everything without touching code.
 """
@@ -41,7 +39,6 @@ from .features import is_flag_enabled, is_xp_enabled, REMINDERS_ENABLED_KEY
 from .state import (
     get_user_state, set_user_state, clear_user_state, cleanup_bot_messages,
 )
-from .recall import get_due_recall, recall_button, recall_ping_text
 from .word_memo import generate_word_memo_test
 
 logger = logging.getLogger(__name__)
@@ -74,27 +71,17 @@ async def send_due_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
     utc_hour = utcnow().hour
     now_iso = utcnow().isoformat()
 
-    today = utcnow().date()
     pings = []  # (telegram_id, text, keyboard) built inside the DB session
     async with get_session() as session:
         user_repo = UserRepository(session)
         session_repo = ExerciseSessionRepository(session)
-        users = await user_repo.get_users_with_reminder_at(utc_hour)
-        for u in users:
-            # Training nudge only if they haven't trained today (no nagging
-            # after a done session); a due delayed recall goes out either way.
-            nudge = u.last_trained_date is None or u.last_trained_date < today
-            recall = await get_due_recall(session_repo, u)
-            if not nudge and not recall:
-                continue
-            preset = await _get_preset(session_repo, u) if nudge else None
-            pings.append((u.telegram_id, *_build_ping(preset, recall)))
-            if nudge:
-                # last_ping opens the fresh-mind window — only for pings
-                # that carry the training button.
-                rem = dict((u.preferences or {}).get("reminder", {}))
-                rem["last_ping"] = now_iso
-                await user_repo.update_preferences(u.telegram_id, {"reminder": rem})
+        due = await user_repo.get_users_due_reminder(utc_hour)
+        for u in due:
+            preset = await _get_preset(session_repo, u)
+            pings.append((u.telegram_id, *_build_ping(preset)))
+            rem = dict((u.preferences or {}).get("reminder", {}))
+            rem["last_ping"] = now_iso
+            await user_repo.update_preferences(u.telegram_id, {"reminder": rem})
 
     for telegram_id, text, keyboard in pings:
         try:
@@ -126,38 +113,30 @@ async def _get_preset(session_repo: ExerciseSessionRepository, db_user) -> dict:
     return dict(_DEFAULT_PRESET)
 
 
-def _build_ping(
-    preset: dict | None, recall: dict | None = None,
-) -> tuple[str, InlineKeyboardMarkup]:
-    """preset None = already trained today: a recall-only ping."""
-    rows = []
-    if preset is not None:
-        unit = FORMAT_UNITS.get(preset["format"], "pairs")
-        emoji = DIFF_EMOJI.get(preset["difficulty"], "⚪")
-        speed_tag = " ⚡" if preset["speed"] else ""
-        text = "🔔 *Daily training time!*\n"
-        if is_xp_enabled():
-            text += (
-                f"Start within {FRESH_MIND_WINDOW_MIN} minutes for the "
-                f"⚡ *fresh-mind bonus* (×{FRESH_MIND_MULT} XP)."
-            )
-        else:
-            text += "A few minutes now keeps your streak alive."
-        go_data = (
-            f"rem:go:{preset['difficulty']}:{preset['count']}"
-            f":{preset['format']}:{1 if preset['speed'] else 0}"
+def _build_ping(preset: dict) -> tuple[str, InlineKeyboardMarkup]:
+    unit = FORMAT_UNITS.get(preset["format"], "pairs")
+    emoji = DIFF_EMOJI.get(preset["difficulty"], "⚪")
+    speed_tag = " ⚡" if preset["speed"] else ""
+    text = "🔔 *Daily training time!*\n"
+    if is_xp_enabled():
+        text += (
+            f"Start within {FRESH_MIND_WINDOW_MIN} minutes for the "
+            f"⚡ *fresh-mind bonus* (×{FRESH_MIND_MULT} XP)."
         )
-        rows.append([InlineKeyboardButton(
+    else:
+        text += "A few minutes now keeps your streak alive."
+    go_data = (
+        f"rem:go:{preset['difficulty']}:{preset['count']}"
+        f":{preset['format']}:{1 if preset['speed'] else 0}"
+    )
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(
             f"🚀 Start: {emoji} {preset['count']} {unit}{speed_tag}",
             callback_data=go_data,
-        )])
-    else:
-        text = ""
-    if recall is not None:
-        text = (text + "\n\n" if text else "") + recall_ping_text(recall)
-        rows.append([recall_button(recall)])
-    rows.append([InlineKeyboardButton("😴 Not today", callback_data="rem:dismiss")])
-    return text, InlineKeyboardMarkup(rows)
+        )],
+        [InlineKeyboardButton("😴 Not today", callback_data="rem:dismiss")],
+    ])
+    return text, keyboard
 
 
 # ============================================================================
@@ -289,7 +268,7 @@ async def handle_reminder_callback(query, context, data: str) -> None:
             await user_repo.update_preferences(user.id, {"reminder": rem})
         await query.edit_message_text(
             f"✅ Daily reminder set for *{hour_local:02d}:00*.\n\n"
-            "You'll get a ping with a one-tap test — no nudge on days you "
+            "You'll get a ping with a one-tap test — no ping on days you "
             "already trained. Change or turn off anytime in /settings.",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup([[

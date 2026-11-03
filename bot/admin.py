@@ -28,7 +28,7 @@ from .features import (
     is_xp_enabled, set_xp_enabled, is_flag_enabled, set_flag,
     AUDIO_VIZ_ENABLED_KEY, AUDIO_VIZ_QUIZ_ENABLED_KEY, AUDIO_XP_ENABLED_KEY,
     REMINDERS_ENABLED_KEY, SPRINT_ENABLED_KEY, ANALYTICS_ENABLED_KEY,
-    RECALL_ENABLED_KEY,
+    SAVED_LISTS_ENABLED_KEY,
 )
 from .menu import sync_command_menu
 from .redeem import admin_codes
@@ -67,9 +67,9 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     elif sub == "sprint":
         await _admin_flag(update, args[1:], SPRINT_ENABLED_KEY,
                           "🏁 Daily sprint challenge", "/admin sprint on|off")
-    elif sub == "recall":
-        await _admin_flag(update, args[1:], RECALL_ENABLED_KEY,
-                          "🧠 Delayed recall", "/admin recall on|off")
+    elif sub == "lists":
+        await _admin_flag(update, args[1:], SAVED_LISTS_ENABLED_KEY,
+                          "📚 Saved lists", "/admin lists on|off")
     elif sub == "analytics":
         await _admin_flag(update, args[1:], ANALYTICS_ENABLED_KEY,
                           "📈 Usage analytics", "/admin analytics on|off")
@@ -99,7 +99,7 @@ async def _admin_overview(update: Update) -> None:
     reminders_status = "ON ✅" if is_flag_enabled(REMINDERS_ENABLED_KEY) else "OFF ⛔"
     sprint_status = "ON ✅" if is_flag_enabled(SPRINT_ENABLED_KEY) else "OFF ⛔"
     analytics_status = "ON ✅" if is_flag_enabled(ANALYTICS_ENABLED_KEY) else "OFF ⛔"
-    recall_status = "ON ✅" if is_flag_enabled(RECALL_ENABLED_KEY) else "OFF ⛔"
+    lists_status = "ON ✅" if is_flag_enabled(SAVED_LISTS_ENABLED_KEY) else "OFF ⛔"
     build = get_build_info()
     build_line = f"🏷 Build: {build.short} ({build.date}){' ⚠️ local edits' if build.dirty else ''}"
     text = (
@@ -113,7 +113,7 @@ async def _admin_overview(update: Update) -> None:
         f"🎧 Audio visualization: {audio_status} (quiz: {audio_quiz_status}, XP: {audio_xp_status})\n"
         f"🔔 Daily reminders: {reminders_status}\n"
         f"🏁 Daily sprint: {sprint_status}\n"
-        f"🧠 Delayed recall: {recall_status}\n"
+        f"📚 Saved lists: {lists_status}\n"
         f"📈 Usage analytics: {analytics_status}\n\n"
         "Commands:\n"
         "/admin users — per-user progress\n"
@@ -128,7 +128,7 @@ async def _admin_overview(update: Update) -> None:
         "/admin audioxp on|off — audio XP (visualization bar)\n"
         "/admin reminders on|off — toggle daily reminders\n"
         "/admin sprint on|off — toggle the daily sprint challenge\n"
-        "/admin recall on|off — toggle delayed recall\n"
+        "/admin lists on|off — toggle saved lists + review\n"
         "/admin analytics on|off — toggle the raw interaction log\n"
         "/admin version — running commit + uptime\n"
         "/admin changes [n] — recent commits of the running build"

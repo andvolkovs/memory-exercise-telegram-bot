@@ -10,19 +10,21 @@ the next big exercise. #2 partially superseded by
 the post-listen focus check — revisit whether vividness still adds signal.
 Shipped: #7 (redemption codes), #9 (daily reminder + fresh-mind bonus),
 #4 (visualization XP bar + audio achievements), #10 L1+L2 (usage logging +
-analytics dashboard), #1 word-memo half (delayed recall).
+analytics dashboard), #1 word-memo half (as saved lists + review).
 
 ---
 
-## 1. Delayed recall (spaced repetition) — flagship feature — word memo ✅ SHIPPED
+## 1. Delayed recall (spaced repetition) — flagship feature — word memo ✅ SHIPPED as saved lists
 
-Word-memo half shipped as self-contained `bot/recall.py` (spec in
-docs/FEATURES.md › Delayed recall). Decisions taken at build time: source
-window 8 h–4 days instead of strictly "yesterday"; 5–10 questions; ×1.5 XP
-without diminishing returns; delivered on /start + inside the existing
-reminder ping (no separate opt-in — the ping already is one). Still open:
-the audio half, SM-2 intervals, "Iron Memory" achievement, and whether
-recall gets its own board. Original plan below.
+First shipped (Oct 2026) as an automatic once-a-day recall of a 5–10
+question sample, pushed via /start and the reminder ping. Owner didn't like
+it; replaced (Nov 2026) by user-driven **saved lists**: every test list is
+kept by date (auto-save on by default, a button under results flips it),
+reviewable from a panel at any time — whole list, from memory, ¼ XP at 80%+
+on the first review of a list each day. Spec: docs/FEATURES.md › Saved
+lists. Still open: the audio half, SM-2-style "due for review" hints in
+the panel or the reminder ping, "Iron Memory" achievement. Original plan
+below.
 
 
 Re-test users on material from previous days. Retrieval after sleep is where

@@ -23,7 +23,7 @@ without asking.
 - **`_IS_SCORED_TEST` (repositories) is duplicated in pandas in `dashboard.py`** — change one and the other silently disagrees.
 - **`RANK_MIN_TESTS` in `bot/quiz_engine.py` must match the leaderboard query's `min_tests`.**
 - **Never rename an achievement `code`** — unlocks are stored by code.
-- **Anti-farm rules are intentional**: retry rounds = subset XP then 0 on 2nd+; first reverse ×0.5, `reverse_extra` = 0 XP; retry/reverse_extra/placement/recall excluded from stats/leaderboard/PB/achievements; retry/reverse/recall rounds never touch the hard streak; recall = once a day, claimed at round start; replayed audio stories earn 0 XP; 80 audio XP/day cap.
+- **Anti-farm rules are intentional**: retry rounds = subset XP then 0 on 2nd+; first reverse ×0.5, `reverse_extra` = 0 XP; retry/reverse_extra/placement/review excluded from stats/leaderboard/PB/achievements; retry/reverse/review rounds never touch the hard streak; review XP = ¼ at 80%+, first review of a list per day only; replayed audio stories earn 0 XP; 80 audio XP/day cap.
 - **Results screens carry no praise line and no progression-suggestion text** — removed on purpose; the ⬆️ Level up / ⚡ Speed run buttons do that job.
 - **Users only ever see *training* time.** Reconstructed "time in bot" is admin-side only; the leaderboard stays on accuracy — time is context, never rank.
 - **Passive audio listens don't count a streak** (audio quiz does).
@@ -49,7 +49,7 @@ bot/admin.py                   # /admin commands
 bot/redeem.py                  # Redemption codes: /redeem + /admin codes
 bot/reminders.py               # Daily reminder + fresh-mind XP bonus
 bot/sprint.py                  # Daily sprint challenge
-bot/recall.py                  # Delayed recall: re-test a sample of an older test
+bot/saved_lists.py             # Saved lists panel (/lists) + review from memory
 bot/analytics.py               # Engaged training time + raw interaction log
 bot/access.py                  # is_admin, admin_only, subscription tier gating
 bot/features.py                # Runtime feature flags (DB-persisted, cached)
@@ -83,7 +83,7 @@ docs/SCALING.md                # SQLite → Postgres/Redis plan with triggers
 ```
 
 Modules marked self-contained in their docstring (`redeem`, `reminders`,
-`sprint`, `recall`, `analytics`, `audio_xp`, audio viz) carry their own removal notes.
+`sprint`, `saved_lists`, `analytics`, `audio_xp`, audio viz) carry their own removal notes.
 
 ## Environment Variables
 
@@ -101,24 +101,24 @@ Loaded from `.env` via `config/settings.py`; singleton via `get_settings()`.
 ## Commands
 
 `/start` `/help` `/stats` `/history` (last 10) `/level` (hidden when XP off)
-`/achievements` `/leaderboard` `/exercises` `/settings` `/redeem` — each maps
+`/achievements` `/leaderboard` `/exercises` `/settings` `/redeem` `/lists` — each maps
 to `<name>_command` in `bot/commands.py`.
 
 `/admin` (admin-only): overview | `users` | `time [days]` | `export` CSV |
 `grant <id> <tier> [days]` | `codes <n> <tier> <days|lifetime>` | `codes list` |
 `version` | `changes [n]` (running commit / recent commits, `bot/version.py`) |
-toggles `xp|audio|audioquiz|audioxp|reminders|sprint|recall|analytics on|off`.
+toggles `xp|audio|audioquiz|audioxp|reminders|sprint|lists|analytics on|off`.
 
 Callbacks route through `callback_handler` → `CALLBACK_ROUTES`, keyed by
 prefix (`word_memo`, `audio_viz`, `lb`, `menu`, `settings`, `placement`,
-`rem`, `recall`). In-test text goes through `text_message_handler`.
+`rem`, `lists`). In-test text goes through `text_message_handler`.
 
 ## Features (summary — detail in `docs/FEATURES.md`)
 
-- **Word Memorization** — formats Pairs / Word List; Training or Test mode; 3 difficulties; 5–100 items; per-question timer + grace window; fuzzy matching (length-scaled typo allowance, real-word answers rejected); results at end only (+ compact toggle, leaderboard standing); Retry Mistakes, Reverse quiz, Placement test, Level-up / Speed-run buttons, personal bests, anti-repeat, daily streak, daily sprint challenge, delayed recall (5–10 questions from a test 8 h–4 days old, once a day).
+- **Word Memorization** — formats Pairs / Word List; Training or Test mode; 3 difficulties; 5–100 items; per-question timer + grace window; fuzzy matching (length-scaled typo allowance, real-word answers rejected); results at end only (+ compact toggle, leaderboard standing); Retry Mistakes, Reverse quiz, Placement test, Level-up / Speed-run buttons, personal bests, anti-repeat, daily streak, daily sprint challenge, saved lists (every test list kept by date, auto-save toggle, review from memory in `/lists`).
 - **Audio Visualization** — narrated story .mp3 the user visualizes; passive by design, optional detail quiz as proxy score. Two flags, both default OFF (`/admin audio`, `/admin audioquiz`). Library rescanned live from `data/audio/`. Fully self-contained → clean removal.
 - **Access codes** (`bot/redeem.py`) — one-time `MTB-XXXX-XXXX` codes set subscription tier; the Skool↔Telegram data link. Tiers not enforced anywhere yet.
-- **Daily reminders** (`bot/reminders.py`) — per-user opt-in, hourly sweep, one-tap ping button with last-used settings, ×1.25 fresh-mind XP within 15 min. Also carries the delayed-recall button (recall-only ping if the user already trained today).
+- **Daily reminders** (`bot/reminders.py`) — per-user opt-in, hourly sweep, one-tap ping button with last-used settings, ×1.25 fresh-mind XP within 15 min.
 - **Usage analytics** (`bot/analytics.py`) — engaged training seconds on the session row + a raw interaction stream (`activity_events`, never message text, purged after `ACTIVITY_RETENTION_DAYS` = 90 by a daily job). Also bumps `last_active_at` (hourly throttle). Feeds `/admin time` and the dashboard.
 - **Gamification** — XP bars per skill (challenge rating, diminishing returns, accuracy gates), 21 achievements, opt-in leaderboard by average score, subscription helpers.
 
@@ -126,7 +126,7 @@ prefix (`word_memo`, `audio_viz`, `lb`, `menu`, `settings`, `placement`,
 
 **User**: `telegram_id` (BigInteger), `username`, `first_name`, `last_name`, `language_code`, `subscription_tier` (FREE/BASIC/PREMIUM) + `subscription_expires_at`, `preferences` (JSON), `current_streak`, `longest_streak`, `last_trained_date`, `leaderboard_opt_in`, timestamps
 
-**ExerciseSession**: `user_id`, `exercise_type`, `difficulty`, `parameters` (JSON: count, mode, format, speed; `items` = the word list on fresh word-memo tests; `source_id` on recall rounds), `score`, `max_score`, `completed`, `duration_s` (nullable), timestamps. Legacy JSON-score rows are backfilled at startup. Rows written only at completion, so `started_at` ≈ `completed_at` — duration comes from `duration_s`, not their difference. Composite index `(user_id, started_at)`.
+**ExerciseSession**: `user_id`, `exercise_type`, `difficulty`, `parameters` (JSON: count, mode, format, speed; `items` + `saved` = the word list on fresh word-memo tests, plus review counters; `source_id` on review rounds), `score`, `max_score`, `completed`, `duration_s` (nullable), timestamps. Legacy JSON-score rows are backfilled at startup. Rows written only at completion, so `started_at` ≈ `completed_at` — duration comes from `duration_s`, not their difference. Composite index `(user_id, started_at)`.
 
 **ActivityEvent**: `telegram_id`, `ts`, `kind`, `detail`; index `(telegram_id, ts)`.
 
@@ -134,7 +134,7 @@ prefix (`word_memo`, `audio_viz`, `lb`, `menu`, `settings`, `placement`,
 
 **UserSkill**: `user_id`, `skill`, `xp`, `level`, `hard_streak`; unique `(user_id, skill)`. One row per XP bar — future bars need no schema change.
 
-**BotSetting**: key-value runtime flags (`xp_enabled`, `audio_viz_enabled`, `audio_viz_quiz_enabled`, `audio_xp_enabled`, `reminders_enabled`, `sprint_enabled`, `recall_enabled`, `analytics_enabled`).
+**BotSetting**: key-value runtime flags (`xp_enabled`, `audio_viz_enabled`, `audio_viz_quiz_enabled`, `audio_xp_enabled`, `reminders_enabled`, `sprint_enabled`, `saved_lists_enabled`, `analytics_enabled`).
 
 **RedemptionCode**: `code` (unique), `tier`, `duration_days` (NULL = lifetime), `redeemed_by` (Telegram ID, NULL = unredeemed), `redeemed_at`, `created_at`.
 

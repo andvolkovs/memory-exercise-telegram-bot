@@ -25,7 +25,9 @@ from exercises.word_memorization import QUESTION_TIME_LIMIT, DIFF_EMOJI
 from .access import is_admin
 from .features import is_xp_enabled, is_exercise_enabled
 from .quiz_engine import cancel_question_timer
-from .recall import get_due_recall, recall_button
+from .saved_lists import (
+    autosave_settings_rows, autosave_settings_text, lists_menu_enabled,
+)
 from .reminders import reminder_settings_text, reminder_settings_rows
 from .state import get_user_state, clear_user_state, cleanup_bot_messages
 
@@ -36,13 +38,8 @@ logger = logging.getLogger(__name__)
 # Main menu keyboard (shared with the callback router)
 # ============================================================================
 
-def get_main_menu_keyboard(
-    show_placement: bool = False, recall: Optional[dict] = None,
-) -> InlineKeyboardMarkup:
-    """*recall*: a due delayed recall (bot/recall.py) — adds its button."""
+def get_main_menu_keyboard(show_placement: bool = False) -> InlineKeyboardMarkup:
     buttons = []
-    if recall:
-        buttons.append([recall_button(recall)])
     if show_placement:
         buttons.append([InlineKeyboardButton(
             "📏 Find your level (2 min)", callback_data="placement:start",
@@ -53,6 +50,8 @@ def get_main_menu_keyboard(
         buttons.append([InlineKeyboardButton(
             f"{info['menu_emoji']} {info['name']}", callback_data=f"exercise:{info['type']}",
         )])
+    if lists_menu_enabled():
+        buttons.append([InlineKeyboardButton("📚 Saved lists", callback_data="lists:page:0")])
     buttons.append([
         InlineKeyboardButton("🏅 Achievements", callback_data="menu:achievements"),
         InlineKeyboardButton("🏆 Leaderboard", callback_data="menu:leaderboard"),
@@ -81,7 +80,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             logger.info(f"New user registered: {user.id} ({user.username})")
         session_repo = ExerciseSessionRepository(session)
         tests_done = await session_repo.count_completed_tests(db_user.id)
-        recall = await get_due_recall(session_repo, db_user)
 
     clear_user_state(context)
 
@@ -100,18 +98,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     show_placement = tests_done == 0
     if show_placement:
         welcome_text += "\n📏 New here? Take a 2-minute level test to find your starting difficulty."
-    if recall:
-        welcome_text += (
-            f"\n🧠 *Delayed recall ready* — {recall['questions']} questions "
-            f"from {recall['age_label']}. What stuck?"
-        )
     welcome_text += "\nChoose an exercise to get started:"
 
     await update.message.reply_text(
         welcome_text, parse_mode=ParseMode.MARKDOWN,
-        reply_markup=get_main_menu_keyboard(
-            show_placement=show_placement, recall=recall,
-        ),
+        reply_markup=get_main_menu_keyboard(show_placement=show_placement),
     )
 
 
@@ -128,7 +119,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/achievements - Your achievements\n"
         "/leaderboard - Compare with others (opt-in)\n"
         "/exercises - Available exercises\n"
-        "/settings - Preferences (compact results, daily reminder)\n"
+        "/lists - Your saved word lists (review from memory)\n"
+        "/settings - Preferences (compact results, auto-save, reminder)\n"
         "/redeem - Activate an access code\n\n"
         "*Formats:*\n"
         "🔗 *Word Pairs* — memorize pairs, recall the partner\n"
@@ -137,12 +129,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "📝 *Training* — Study at your own pace\n"
         "🎯 *Test* — Study, then quiz (normal or ⚡ speed)\n"
         "🔀 *Reverse Quiz* — Re-quiz flipped\n"
-        "🧠 *Delayed Recall* — hours later, a quick quiz on what stuck "
-        "(shows up on /start and in your daily reminder)\n\n"
+        "📚 *Saved Lists* — every test list is kept by date; review one "
+        "from memory anytime (/lists)\n\n"
         f"⏱ {QUESTION_TIME_LIMIT}s per question · typos tolerated\n\n"
         # Usage disclosure — keep in sync with what bot/analytics.py records.
         "🔒 *Your data:* the bot records your results (with the word lists "
-        "you studied, for delayed recall), time spent per exercise and "
+        "you studied, so you can review them), time spent per exercise and "
         "which buttons you use, to track your progress and "
         "improve training. The bot admin can see these stats. The content "
         "of your messages is never stored."
@@ -460,12 +452,14 @@ def _settings_text_and_keyboard(preferences: dict) -> tuple[str, InlineKeyboardM
         "Off: full results with streak, personal best and tips._\n\n"
         f"Currently: *{'On ✅' if compact else 'Off'}*"
     )
+    text += autosave_settings_text(preferences)
     text += reminder_settings_text(preferences)
     rows = [
         [InlineKeyboardButton(
             f"📋 Compact results: {'✅ On' if compact else '⬜ Off'}",
             callback_data="settings:toggle_compact",
         )],
+        *autosave_settings_rows(preferences),
         *reminder_settings_rows(preferences),
         [InlineKeyboardButton("📏 Retake level test", callback_data="placement:start")],
     ]

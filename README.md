@@ -20,7 +20,7 @@ for a mental-training community.
 - Personal bests (per format), progressive difficulty suggestions at ≥90%
 - Anti-repeat word selection (rolling 200-word window)
 - Daily streak tracking, plus a daily sprint challenge (5 tests at 90%+ inside an hour)
-- Delayed recall — 8 h to 4 days after a test, a 5–10 question quiz on what stuck (×1.5 XP)
+- Saved lists — every test list kept by date (auto-save toggle); review any of them from memory, ¼ XP at 80%+ once a day per list
 
 ### Audio Visualization
 - Narrated stories (1/3/5 min) the user listens to and visualizes; passive by design
@@ -82,7 +82,7 @@ mental_training_bot/
 │   ├── features.py               # Runtime feature flags
 │   ├── reminders.py              # Daily reminder + fresh-mind bonus
 │   ├── sprint.py                 # Daily sprint challenge
-│   ├── recall.py                 # Delayed recall (spaced re-test)
+│   ├── saved_lists.py            # Saved lists panel + review
 │   └── redeem.py                 # Access codes
 ├── gamification/                  # XP, levels, achievements
 ├── exercises/                     # BaseExercise ABC, registry, exercise logic

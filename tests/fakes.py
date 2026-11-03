@@ -12,6 +12,7 @@ class FakeMessage:
         self.message_id = message_id
         self.chat_id = chat_id
         self.text = text
+        self.reply_markup = None
 
 
 class FakeBot:
@@ -21,6 +22,7 @@ class FakeBot:
     def __init__(self, delete_delay: float = 0.0):
         self._next_id = 100
         self.sent: list[str] = []
+        self.markups: list = []   # reply_markup of each sent message (or None)
         self.deleted: list[int] = []
         self.edited: list[str] = []
         self.delete_delay = delete_delay
@@ -28,7 +30,10 @@ class FakeBot:
     async def send_message(self, chat_id, text, **kwargs):
         self._next_id += 1
         self.sent.append(text)
-        return FakeMessage(self._next_id, chat_id, text)
+        self.markups.append(kwargs.get("reply_markup"))
+        msg = FakeMessage(self._next_id, chat_id, text)
+        msg.reply_markup = kwargs.get("reply_markup")
+        return msg
 
     async def delete_message(self, chat_id, message_id):
         await asyncio.sleep(self.delete_delay)
@@ -125,6 +130,9 @@ class FakeQuery:
 
     async def edit_message_text(self, text=None, *a, **kw):
         self.edits.append(text or "")
+
+    async def edit_message_reply_markup(self, reply_markup=None, **kw):
+        self.message.reply_markup = reply_markup
 
     async def answer(self, *a, **kw):
         return None

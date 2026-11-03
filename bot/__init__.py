@@ -32,6 +32,7 @@ from .analytics import activity_tracker, schedule_retention_job
 from .features import load_feature_flags
 from .menu import sync_command_menu
 from .redeem import redeem_command
+from .saved_lists import lists_command
 from .reminders import schedule_reminder_job
 from .version import get_build_info
 
@@ -53,6 +54,7 @@ def setup_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("level", level_command))
     application.add_handler(CommandHandler("settings", settings_command))
     application.add_handler(CommandHandler("redeem", redeem_command))
+    application.add_handler(CommandHandler("lists", lists_command))
     application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     application.add_handler(

@@ -32,7 +32,7 @@ from gamification import (
     AchievementContext, evaluate_achievements,
     SKILLS, EXERCISE_SKILLS, compute_test_xp, level_from_xp,
 )
-from gamification.xp import MIN_XP_SCORE_PCT, RECALL_XP_MULT
+from gamification.xp import MIN_XP_SCORE_PCT, REVIEW_MIN_PCT, REVIEW_XP_MULT
 from exercises.word_memorization import (
     QUESTION_TIME_LIMIT,
     DIFFICULTY_NAMES,
@@ -422,17 +422,17 @@ async def _show_test_results(context, chat_id, state) -> None:
     is_retry = round_mode == "retry"
     is_placement = round_mode == "placement"
     is_extra_reverse = round_mode == "reverse_extra"
-    # Delayed recall (bot/recall.py): a sample of an older test, no study
-    # phase. Unscored like retry — no PB, achievements or leaderboard.
-    is_recall = round_mode == "recall"
-    is_unscored = is_retry or is_placement or is_extra_reverse or is_recall
+    # Saved-list review (bot/saved_lists.py): an old list re-quizzed from
+    # memory. Unscored like retry — no PB, achievements or leaderboard.
+    is_review = round_mode == "review"
+    is_unscored = is_retry or is_placement or is_extra_reverse or is_review
 
     # XP throttle for repeat rounds on one memorized set: first reverse earns
     # half (recalling backwards is real work, but the set was already paid out
     # in full), everything after that — extra reverses, second+ retries —
     # earns nothing. Blocks the farm loop: memorize once, reverse forever.
-    if is_recall:
-        xp_mult = RECALL_XP_MULT
+    if is_review:
+        xp_mult = REVIEW_XP_MULT   # + the gates in the XP block below
     elif round_mode == "reverse":
         xp_mult = 0.5
     elif is_extra_reverse or (is_retry and state.get("test_retry_rounds", 1) > 1):
@@ -449,6 +449,8 @@ async def _show_test_results(context, chat_id, state) -> None:
     rank_line = None
     offer_join = False
     compact = False
+    saved_row_id = None     # fresh test row → the save/unsave toggle button
+    saved_flag = False
     try:
         async with get_session() as session:
             user_repo = UserRepository(session)
@@ -467,18 +469,21 @@ async def _show_test_results(context, chat_id, state) -> None:
                     "count": len(pairs), "mode": round_mode, "format": fmt,
                     "speed": state.get("speed_mode", False),
                 }
-                # The word list itself, on fresh word-memo tests only — the
-                # source for delayed recall (bot/recall.py). Retry/reverse
-                # rounds reuse the same set, so storing it again adds nothing.
-                if round_mode == "test" and exercise_key == "word_memo":
+                # The word list itself, on fresh word-memo tests only — what
+                # the saved-lists panel shows and reviews (bot/saved_lists.py).
+                # Always stored; "saved" follows the user's auto-save setting
+                # and the toggle button flips it. Retry/reverse rounds reuse
+                # the same set, so storing it again adds nothing.
+                is_fresh_list = round_mode == "test" and exercise_key == "word_memo"
+                if is_fresh_list:
                     params["items"] = [
                         list(p) if isinstance(p, (list, tuple)) else p
                         for p in pairs
                     ]
-                if is_recall:
-                    params["source_id"] = state.get("recall_source_id")
-                    params["source_format"] = state.get("recall_source_format")
-                await session_repo.create(
+                    params["saved"] = (db_user.preferences or {}).get("autosave_lists", True)
+                if is_review:
+                    params["source_id"] = state.get("review_source_id")
+                new_row = await session_repo.create(
                     user_id=db_user.id,
                     exercise_type=exercise_enum,
                     difficulty=difficulty_value,
@@ -486,9 +491,24 @@ async def _show_test_results(context, chat_id, state) -> None:
                     score=correct_count, max_score=total, completed=True,
                     duration_s=round_duration_s(state),
                 )
+                if is_fresh_list:
+                    saved_row_id, saved_flag = new_row.id, params["saved"]
+                # Review: the list it re-quizzed. Review XP pays once per list
+                # per UTC day (review_xp_date on that row).
+                today_iso = utcnow().date().isoformat()
+                review_src = None
+                review_xp_claimed = False
+                if is_review:
+                    review_src = await session_repo.get_own_test_row(
+                        db_user.id, state.get("review_source_id"),
+                    )
+                review_xp_open = bool(
+                    review_src
+                    and (review_src.parameters or {}).get("review_xp_date") != today_iso
+                )
                 # Personal best — not on retries (merged score mixes baseline
                 # with a redo), not on placement (one-off calibration), not on
-                # extra reverses (unscored practice rounds), not on recall.
+                # extra reverses (unscored practice rounds), not on reviews.
                 if not is_unscored:
                     if prev_best is not None and score_pct > prev_best:
                         personal_best_text = f"🏆 *New personal best!* (previous: {prev_best:.0f}%)"
@@ -506,7 +526,7 @@ async def _show_test_results(context, chat_id, state) -> None:
                         streak_text = f"🔥 *{s}-day streak!* Keep it up!"
                 # Achievements — skipped on retries so a retried-to-100% score
                 # can't farm perfect-score achievements; skipped on placement
-                # extra reverses and recall (excluded from scored tests).
+                # extra reverses and reviews (excluded from scored tests).
                 if not is_unscored:
                     total_tests = await session_repo.count_completed_tests(db_user.id)
                     ctx = AchievementContext(
@@ -526,7 +546,7 @@ async def _show_test_results(context, chat_id, state) -> None:
                         )
                 # Leaderboard standing — full results only (compact stays a
                 # bare score card), and only on rounds that actually moved the
-                # average (retry/placement/extra-reverse/recall are excluded).
+                # average (retry/placement/extra-reverse/review are excluded).
                 if not compact and not is_unscored:
                     rank_line, offer_join = await _build_rank_line(
                         session_repo, user_repo, chat_id, db_user.preferences,
@@ -567,17 +587,15 @@ async def _show_test_results(context, chat_id, state) -> None:
                         # extend nor break it: a retry subset always rates
                         # easy (it used to reset the streak to 0), and a
                         # reverse would count the same set twice. Scored
-                        # from 0 so they get no streak bonus either. Recall
-                        # is a small sample of an old set — same treatment.
-                        is_repeat_round = round_mode in ("retry", "reverse", "recall")
+                        # from 0 so they get no streak bonus either. A
+                        # review re-asks an old set — same treatment.
+                        is_repeat_round = round_mode in ("retry", "reverse", "review")
                         xp_res = compute_test_xp(
                             pairs=len(quiz_items),
                             difficulty=difficulty_value,
                             speed_mode=state.get("speed_mode", False),
                             score_pct=round_pct,
-                            # Recall: the bot sizes the round, so no
-                            # diminishing returns (level 1 = full value).
-                            level=1 if is_recall else skill_row.level,
+                            level=skill_row.level,
                             hard_streak=0 if is_repeat_round else skill_row.hard_streak,
                         )
                         new_hard_streak = (
@@ -585,6 +603,18 @@ async def _show_test_results(context, chat_id, state) -> None:
                             else xp_res.new_hard_streak
                         )
                         xp_award = round(xp_res.xp * xp_mult)
+                        # Review gates: REVIEW_MIN_PCT+, first review of this
+                        # list today. Anything else earns nothing.
+                        review_note = None
+                        if is_review:
+                            if round_pct < REVIEW_MIN_PCT:
+                                xp_award = 0
+                                review_note = f"💡 _Review XP needs {REVIEW_MIN_PCT:.0f}%+._"
+                            elif not review_xp_open:
+                                xp_award = 0
+                                review_note = "💡 _Review XP for this list is already earned today._"
+                            elif xp_award > 0:
+                                review_xp_claimed = True
                         # ⚡ Fresh-mind bonus: test launched from a daily
                         # reminder ping within the window. Remove this block
                         # together with bot/reminders.py (lazy import — a
@@ -608,9 +638,10 @@ async def _show_test_results(context, chat_id, state) -> None:
                                 f"⭐ *+{xp_award} XP* {skill.emoji} {skill.name} — "
                                 f"Level {new_level} ({xp_into}/{xp_need})"
                             )
-                            if is_recall and not compact:
+                            if is_review and not compact:
                                 xp_lines.append(
-                                    f"🧠 Delayed recall — ×{RECALL_XP_MULT:g} XP"
+                                    "📚 List review — ¼ XP, first good review "
+                                    "of this list today"
                                 )
                             elif xp_mult < 1.0 and not compact:
                                 xp_lines.append(
@@ -629,11 +660,22 @@ async def _show_test_results(context, chat_id, state) -> None:
                                 xp_lines.append(
                                     f"🎉 *LEVEL UP!* {skill.name} is now *Level {new_level}*"
                                 )
+                        elif review_note:
+                            xp_lines.append(review_note)
                         elif round_pct < MIN_XP_SCORE_PCT:
                             xp_lines.append(
                                 f"💡 _No XP below {MIN_XP_SCORE_PCT:.0f}% — "
                                 "try a smaller or easier set and build up!_"
                             )
+                if review_src is not None:
+                    changes = {
+                        "last_review_at": utcnow().isoformat(),
+                        "last_review_pct": round(score_pct),
+                        "reviews": (review_src.parameters or {}).get("reviews", 0) + 1,
+                    }
+                    if review_xp_claimed:
+                        changes["review_xp_date"] = today_iso
+                    await session_repo.set_parameters(review_src, **changes)
                 # 🏁 Daily sprint (cosmetic) — fresh tests only, so retry /
                 # reverse / placement rounds can't tick it. Remove this block
                 # together with bot/sprint.py.
@@ -657,9 +699,9 @@ async def _show_test_results(context, chat_id, state) -> None:
         compact=compact,
         fmt=fmt,
     )
-    if is_recall:
+    if is_review:
         results_text = (
-            f"🧠 *Delayed recall* — {state.get('recall_age_label', 'an earlier test')}\n\n"
+            f"📚 *List review* — saved {state.get('review_label', 'earlier')}\n\n"
             + results_text
         )
 
@@ -678,16 +720,16 @@ async def _show_test_results(context, chat_id, state) -> None:
         results_text += "\n\n" + sprint_line
 
     state["test_active"] = False
-    # Not for recall: a stale Retry/Reverse button from an older results
-    # screen must not turn the recall sample into a paid retry round.
-    if not is_recall:
+    # Not for reviews: a stale Retry/Reverse button from an older results
+    # screen must not turn a reviewed list into a paid retry/reverse round.
+    if not is_review:
         state["last_test_results"] = merged_results
         state["last_test_pairs"] = pairs
 
     # Save used words to rolling recent-words window (avoids repetition).
-    # Word-memo only — other exercises' items aren't vocabulary. Recall
-    # rounds re-ask old words; they were saved when first studied.
-    if exercise_key == "word_memo" and not is_recall:
+    # Word-memo only — other exercises' items aren't vocabulary. Reviews
+    # re-ask old words; they were saved when first studied.
+    if exercise_key == "word_memo" and not is_review:
         try:
             await save_recent_words(chat_id, pairs)
         except Exception as e:
@@ -709,13 +751,10 @@ async def _show_test_results(context, chat_id, state) -> None:
             )],
             [InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")],
         ])
-    elif is_recall:
-        # No retry/reverse/level-up: the round is a fixed sample of an old
-        # set, and the results above just revealed every answer.
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🎯 New test", callback_data="exercise:word_memo")],
-            [InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")],
-        ])
+    elif is_review:
+        # No retry/reverse/level-up — a review is re-run from the panel.
+        from .saved_lists import review_results_keyboard   # lazy: cycle
+        keyboard = review_results_keyboard(state.get("review_source_id"))
     else:
         has_mistakes = any(not r["correct"] for r in merged_results)
         kb_kwargs = dict(
@@ -731,6 +770,11 @@ async def _show_test_results(context, chat_id, state) -> None:
             )
             kb_kwargs["offer_leaderboard_join"] = offer_join
         keyboard = exercise.get_results_keyboard(**kb_kwargs)
+        if saved_row_id is not None:
+            # 💾/🗑 toggle — the opposite of the user's auto-save default,
+            # flips in place (bot/saved_lists.py). Lazy import: cycle.
+            from .saved_lists import with_save_toggle
+            keyboard = with_save_toggle(keyboard, saved_row_id, saved_flag)
 
     # Over-long results go out as several messages, buttons on the last.
     # The leading parts are tracked so the next cleanup removes them along

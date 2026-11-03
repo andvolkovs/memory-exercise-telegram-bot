@@ -19,7 +19,7 @@ AUDIO_XP_ENABLED_KEY = "audio_xp_enabled"
 REMINDERS_ENABLED_KEY = "reminders_enabled"
 SPRINT_ENABLED_KEY = "sprint_enabled"
 ANALYTICS_ENABLED_KEY = "analytics_enabled"
-RECALL_ENABLED_KEY = "recall_enabled"
+SAVED_LISTS_ENABLED_KEY = "saved_lists_enabled"
 
 # Defaults apply when the key has never been set in the DB.
 # Audio visualization ships dark: admin flips it on when content is ready.
@@ -30,8 +30,9 @@ RECALL_ENABLED_KEY = "recall_enabled"
 # kill switch /admin audioxp off (see gamification/audio_xp.py).
 # Analytics default on — gates only the raw interaction log (bot/analytics.py);
 # per-round training time is stored either way.
-# Recall default on — it only ever shows up inside the opt-in reminder ping
-# and as a /start button; kill switch /admin recall off (bot/recall.py).
+# Saved lists default on — kill switch /admin lists off hides the panel,
+# the save buttons and review starts (bot/saved_lists.py). Lists are still
+# recorded while off, so switching back on loses nothing.
 _flags: dict[str, bool] = {
     XP_ENABLED_KEY: True,
     AUDIO_VIZ_ENABLED_KEY: False,
@@ -40,7 +41,7 @@ _flags: dict[str, bool] = {
     REMINDERS_ENABLED_KEY: True,
     SPRINT_ENABLED_KEY: True,
     ANALYTICS_ENABLED_KEY: True,
-    RECALL_ENABLED_KEY: True,
+    SAVED_LISTS_ENABLED_KEY: True,
 }
 
 

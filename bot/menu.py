@@ -22,6 +22,7 @@ def _user_commands() -> list[BotCommand]:
         BotCommand("exercises", "Choose an exercise"),
         BotCommand("stats", "Your statistics"),
         BotCommand("history", "Last 10 test results"),
+        BotCommand("lists", "Saved word lists — review"),
     ]
     if is_xp_enabled():
         commands.append(BotCommand("level", "Your XP and levels"))

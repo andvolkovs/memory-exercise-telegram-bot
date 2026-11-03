@@ -79,11 +79,12 @@ EFFICIENCY_FLOOR = 0.15
 HARD_STREAK_BONUS_PER = 0.10
 HARD_STREAK_BONUS_CAP = 0.50
 
-# Delayed recall (bot/recall.py): retrieval after sleep is harder than an
-# immediate quiz, so it pays more. Applied on top of an XP calc that skips
-# diminishing returns — the bot, not the user, picks the round size, and it
-# runs at most once a day, so there is nothing to farm.
-RECALL_XP_MULT = 1.5
+# Saved-list review (bot/saved_lists.py): re-quizzing a list you already
+# memorized pays a quarter of what the same round would earn as a fresh
+# test, only at REVIEW_MIN_PCT+, and only on the first review of that list
+# each UTC day — a small reward for keeping lists alive, nothing to farm.
+REVIEW_XP_MULT = 0.25
+REVIEW_MIN_PCT = 80.0
 
 
 def expected_challenge(level: int) -> float:
