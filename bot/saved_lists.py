@@ -73,6 +73,10 @@ _starting: set[int] = set()
 
 _MAIN_MENU_ROW = [InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")]
 
+# Word-memo menu choices kept across a review (see start_review). speed_mode
+# is among them; the engine scores review rounds as normal speed regardless.
+_MENU_KEYS = ("mode", "format", "difficulty", "count", "speed_mode")
+
 
 def lists_menu_enabled() -> bool:
     return is_flag_enabled(SAVED_LISTS_ENABLED_KEY)
@@ -149,6 +153,14 @@ def _swap_toggle(markup: InlineKeyboardMarkup | None, row_id: int, saved: bool) 
         for r in markup.inline_keyboard
     ]
     return InlineKeyboardMarkup(rows)
+
+
+def _drop_toggle(markup: InlineKeyboardMarkup | None, row_id: int) -> InlineKeyboardMarkup | None:
+    if markup is None:
+        return None
+    ids = (f"lists:save:{row_id}", f"lists:unsave:{row_id}")
+    rows = [[b for b in r if b.callback_data not in ids] for r in markup.inline_keyboard]
+    return InlineKeyboardMarkup([r for r in rows if r])
 
 
 def review_results_keyboard(source_id: int | None) -> InlineKeyboardMarkup:
@@ -335,6 +347,13 @@ async def handle_lists_callback(query, context, data: str) -> None:
     user_id = query.from_user.id
 
     if not lists_menu_enabled():
+        if action in ("save", "unsave"):
+            # Toggle under a results screen: drop the button, keep the
+            # results — replacing them with "paused" lost the user's score.
+            markup = _drop_toggle(getattr(query.message, "reply_markup", None), int(parts[2]))
+            if markup is not None:
+                await query.edit_message_reply_markup(reply_markup=markup)
+            return
         await query.edit_message_text(
             "Saved lists are paused right now.",
             reply_markup=InlineKeyboardMarkup([_MAIN_MENU_ROW]),
@@ -437,7 +456,14 @@ async def start_review(query, context, row_id: int) -> None:
         cancel_question_timer(context, user_id)
         cancel_study_timer(context, user_id)
         await cleanup_bot_messages(context.bot, chat_id, state)
+        # The test-menu settings survive the review: an older results
+        # screen's ⬆️ Level up / 🔄 Another List read them, and without them
+        # fell back to a Beginner training round. last_test_* is NOT kept —
+        # a stale Retry would pay retry XP again on an already-retried set.
+        kept = {k: state[k] for k in _MENU_KEYS if k in state}
         clear_user_state(context)
+        for k, v in kept.items():
+            set_user_state(context, k, v)
         set_user_state(context, "current_exercise", "word_memo")
         set_user_state(context, "test_active", True)
         set_user_state(context, "test_exercise_type", "word_memo")
@@ -450,7 +476,6 @@ async def start_review(query, context, row_id: int) -> None:
         set_user_state(context, "test_chat_id", chat_id)
         set_user_state(context, "baseline_results", [])
         set_user_state(context, "test_round_mode", "review")
-        set_user_state(context, "speed_mode", False)
         set_user_state(context, "review_source_id", row_id)
         set_user_state(context, "review_label", label)
         state = get_user_state(context)

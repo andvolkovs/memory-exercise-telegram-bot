@@ -426,6 +426,9 @@ async def _show_test_results(context, chat_id, state) -> None:
     # memory. Unscored like retry — no PB, achievements or leaderboard.
     is_review = round_mode == "review"
     is_unscored = is_retry or is_placement or is_extra_reverse or is_review
+    # A review has no study phase, so it is always scored as normal speed —
+    # speed_mode in state is the user's menu choice, kept for stale buttons.
+    round_speed = False if is_review else state.get("speed_mode", False)
 
     # XP throttle for repeat rounds on one memorized set: first reverse earns
     # half (recalling backwards is real work, but the set was already paid out
@@ -467,7 +470,7 @@ async def _show_test_results(context, chat_id, state) -> None:
                 # so stats, leaderboard and admin views aggregate in SQL.
                 params = {
                     "count": len(pairs), "mode": round_mode, "format": fmt,
-                    "speed": state.get("speed_mode", False),
+                    "speed": round_speed,
                 }
                 # The word list itself, on fresh word-memo tests only — what
                 # the saved-lists panel shows and reviews (bot/saved_lists.py).
@@ -596,7 +599,7 @@ async def _show_test_results(context, chat_id, state) -> None:
                         xp_res = compute_test_xp(
                             pairs=len(quiz_items),
                             difficulty=difficulty_value,
-                            speed_mode=state.get("speed_mode", False),
+                            speed_mode=round_speed,
                             score_pct=round_pct,
                             level=skill_row.level,
                             hard_streak=0 if is_repeat_round else skill_row.hard_streak,
@@ -618,6 +621,13 @@ async def _show_test_results(context, chat_id, state) -> None:
                                 review_note = "💡 _Review XP only counts on the first review of a list each day._"
                             elif xp_award > 0:
                                 review_xp_claimed = True
+                            else:
+                                # ¼ of a small list's value can round to 0
+                                # at high levels — say so, not silence.
+                                review_note = (
+                                    "💡 _Review XP rounds to 0 at your level "
+                                    "for a list this size._"
+                                )
                         # ⚡ Fresh-mind bonus: test launched from a daily
                         # reminder ping within the window. Remove this block
                         # together with bot/reminders.py (lazy import — a
@@ -813,6 +823,10 @@ async def start_retry_mistakes(query, context) -> None:
     last_pairs = state.get("last_test_pairs", [])
     difficulty = state.get("test_difficulty", state.get("difficulty", Difficulty.BEGINNER))
 
+    if not last_results:
+        # Stale button: that test's state is gone (a review, a menu reset).
+        await query.edit_message_text("No pairs available. Start a new test first.")
+        return
     wrong_results = [r for r in last_results if not r["correct"]]
     if not wrong_results:
         await query.edit_message_text("No mistakes to retry! 🎉")

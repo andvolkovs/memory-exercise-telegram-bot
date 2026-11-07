@@ -285,3 +285,58 @@ async def test_old_recall_buttons_point_to_saved_lists():
     q = FakeQuery(uid)
     await sl.handle_legacy_recall_callback(q, FakeContext(uid), "recall:go:5")
     assert "replaced by 📚 *Saved lists*" in q.edits[-1]
+
+
+# ---- follow-up fixes -------------------------------------------------------
+
+async def test_review_keeps_test_menu_settings_but_scores_normal_speed():
+    # Stale ⬆️ Level up / 🔄 Another List buttons read these after a review.
+    uid = await _new_user()
+    async with get_session() as s:
+        u = await UserRepository(s).get_by_telegram_id(uid)
+        src = await _stored(s, u, saved=True)
+        src_id = src.id
+    ctx = FakeContext(uid)
+    ctx.state = {"mode": "test", "format": "pairs", "count": 15,
+                 "difficulty": Difficulty.ADVANCED, "speed_mode": True,
+                 "last_test_results": [{"correct": False}]}
+    await sl.handle_lists_callback(FakeQuery(uid), ctx, f"lists:review:{src_id}")
+    st = ctx.state
+    assert (st["mode"], st["count"], st["difficulty"], st["speed_mode"]) == (
+        "test", 15, Difficulty.ADVANCED, True)
+    assert "last_test_results" not in st     # stale Retry can't re-pay
+    await qe._show_test_results(ctx, uid, _finished_state("review", PAIRS, ["river", "stone"]) | {
+        "review_source_id": src_id, "speed_mode": True})
+    _, rows = await _rows(uid)
+    assert rows[0].parameters["mode"] == "review" and rows[0].parameters["speed"] is False
+
+
+async def test_stale_retry_after_review_says_start_new_test():
+    uid = await _new_user()
+    ctx, q = FakeContext(uid), FakeQuery(uid)
+    ctx.state = {"mode": "test"}
+    await qe.start_retry_mistakes(q, ctx)
+    assert "Start a new test" in q.edits[-1]
+
+
+async def test_review_xp_rounding_to_zero_is_explained(monkeypatch):
+    monkeypatch.setattr(qe, "REVIEW_XP_MULT", 0.0001)
+    uid = await _new_user()
+    async with get_session() as s:
+        u = await UserRepository(s).get_by_telegram_id(uid)
+        src = await _stored(s, u, saved=True)
+    ctx = await _review(uid, src.id, ["river", "stone"])
+    assert "rounds to 0 at your level" in ctx.bot.sent[-1]
+
+
+async def test_paused_toggle_drops_button_and_keeps_results(monkeypatch):
+    uid = await _new_user()
+    ctx = await _finish_test(uid)
+    _, rows = await _rows(uid)
+    q = FakeQuery(uid)
+    q.message.reply_markup = ctx.bot.markups[-1]
+    monkeypatch.setitem(features._flags, features.SAVED_LISTS_ENABLED_KEY, False)
+    await sl.handle_lists_callback(q, ctx, f"lists:unsave:{rows[0].id}")
+    assert q.edits == []                          # results text untouched
+    assert not any(d.startswith("lists:") for d in _callbacks(q.message.reply_markup))
+    assert "main_menu" in _callbacks(q.message.reply_markup)
